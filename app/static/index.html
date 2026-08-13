@@ -72,8 +72,11 @@
   .why{grid-column:2;font-size:11px;color:var(--dimmer);margin-top:2px}
 
   /* ---- graph ---- */
+  /* The graph is the mechanism; it must not scroll out of view while the
+     analyst reads the underwrite below it. */
+  .gwrap{position:sticky;top:0;z-index:5;background:var(--bg);padding-bottom:10px}
   #graph{width:100%;height:230px;border:1px solid var(--line);border-radius:7px;
-    background:#0b0f16;margin-bottom:12px}
+    background:#0b0f16;display:block}
 
   /* ---- right rail ---- */
   .item{border:1px solid var(--line);border-left:3px solid var(--dead);
@@ -144,8 +147,10 @@
       <span class="chipagent fin" id="a-finance">finance</span>
       <span class="chipagent" id="a-llm">llm —</span>
     </div>
-    <div id="gcap" style="font-size:10px;color:var(--dim);margin-bottom:5px"></div>
-    <svg id="graph"></svg>
+    <div class="gwrap">
+      <div id="gcap" style="font-size:10px;color:var(--dim);margin-bottom:5px"></div>
+      <svg id="graph"></svg>
+    </div>
     <h2 id="uwTitle">Working underwrite</h2>
     <div id="uw"><div class="empty">Run the baseline to populate the ledger.</div></div>
   </div>
@@ -209,7 +214,15 @@ function renderSites(){
       </div></div>`;
   }).join('');
   document.querySelectorAll('.site').forEach(el =>
-    el.onclick = () => { SEL = el.dataset.id; renderSites(); renderUW(); drawGraph([]); });
+    el.onclick = () => {
+      SEL = el.dataset.id;
+      // Both the open provenance panel and the focused graph belong to the site
+      // being left behind. Carrying them over shows one site's numbers under
+      // another site's heading.
+      FOCUS = null;
+      $('#prov').style.display = 'none';
+      renderSites(); renderUW(); drawGraph([]);
+    });
 }
 
 const ORDER = ['max_mw','max_mwh','duration_hours','capex','months_to_energization',
