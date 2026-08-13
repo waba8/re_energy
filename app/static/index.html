@@ -1,0 +1,439 @@
+<title>PREMISE</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#0a0d12; --panel:#111721; --line:#1e2733; --line2:#2a3646;
+    --ink:#e8eef7; --dim:#8296ad; --dimmer:#5a6c82;
+    --eng:#4aa8ff; --per:#c77dff; --fin:#3ddc97;
+    --dead:#ff4d5e; --warn:#ffb03a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace;overflow:hidden}
+  header{display:flex;align-items:center;gap:16px;padding:9px 16px;
+    border-bottom:1px solid var(--line);background:#0d1219}
+  .brand{font-weight:700;letter-spacing:.22em;font-size:14px}
+  .tag{color:var(--dim);font-size:11px}
+  .budget{margin-left:auto;display:flex;gap:20px;align-items:center;font-size:12px}
+  .budget b{font-size:16px;font-variant-numeric:tabular-nums}
+  button{background:#182231;color:var(--ink);border:1px solid var(--line2);
+    padding:6px 12px;border-radius:5px;font:inherit;font-size:11px;cursor:pointer}
+  button:hover:not(:disabled){background:#22304a;border-color:#3d5578}
+  button:disabled{opacity:.35;cursor:not-allowed}
+
+  main{display:grid;grid-template-columns:300px 1fr 340px;
+    height:calc(100vh - 43px)}
+  .col{overflow-y:auto;padding:12px}
+  .col+.col{border-left:1px solid var(--line)}
+  h2{font-size:10px;letter-spacing:.15em;color:var(--dimmer);
+    text-transform:uppercase;margin:0 0 9px;font-weight:600}
+
+  /* ---- site cards ---- */
+  .site{border:1px solid var(--line);border-radius:7px;margin-bottom:8px;
+    overflow:hidden;cursor:pointer;transition:.18s;background:var(--panel)}
+  .site:hover{border-color:#3d5578}
+  .site.sel{border-color:#4d7fc4;background:#131c2b}
+  .site.hit{border-color:var(--dead);animation:pulse 1s ease-in-out 3}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,77,94,0)}
+    50%{box-shadow:0 0 0 4px rgba(255,77,94,.28)}}
+  .thumb{height:74px;background:#0d1219 center/cover;position:relative}
+  .thumb .badge{position:absolute;right:6px;top:6px;font-size:9px;padding:2px 6px;
+    border-radius:3px;background:rgba(6,10,16,.86);letter-spacing:.06em}
+  .sbody{padding:8px 10px}
+  .sname{font-size:12px;font-weight:600;margin-bottom:2px}
+  .smeta{font-size:10px;color:var(--dimmer)}
+  .srow{display:flex;justify-content:space-between;margin-top:6px;font-size:11px}
+  .alloc{font-variant-numeric:tabular-nums;font-weight:600}
+  .ok{color:var(--fin)} .no{color:var(--dimmer)} .bad{color:var(--dead)}
+
+  /* ---- centre ---- */
+  .agentbar{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .chipagent{font-size:10px;padding:3px 9px;border-radius:20px;
+    border:1px solid var(--line2);color:var(--dim);letter-spacing:.05em}
+  .chipagent.run{border-color:var(--warn);color:var(--warn);
+    animation:blink .8s ease-in-out infinite}
+  @keyframes blink{50%{opacity:.4}}
+  .chipagent.eng.on{border-color:var(--eng);color:var(--eng)}
+  .chipagent.per.on{border-color:var(--per);color:var(--per)}
+  .chipagent.fin.on{border-color:var(--fin);color:var(--fin)}
+
+  .field{display:grid;grid-template-columns:190px 1fr;gap:10px;padding:7px 9px;
+    border-bottom:1px solid #161f2c;align-items:baseline}
+  .field:hover{background:#0f1620}
+  .fname{color:var(--dim);font-size:11px}
+  .fval{font-variant-numeric:tabular-nums;cursor:pointer;
+    border-bottom:1px dotted var(--line2);display:inline-block}
+  .fval:hover{border-bottom-color:var(--eng);color:var(--eng)}
+  .field.stale{opacity:.42}
+  .field.stale .fval{text-decoration:line-through;color:var(--dead)}
+  .agentdot{width:6px;height:6px;border-radius:50%;display:inline-block;
+    margin-right:6px;vertical-align:middle}
+  .why{grid-column:2;font-size:11px;color:var(--dimmer);margin-top:2px}
+
+  /* ---- graph ---- */
+  #graph{width:100%;height:230px;border:1px solid var(--line);border-radius:7px;
+    background:#0b0f16;margin-bottom:12px}
+
+  /* ---- right rail ---- */
+  .item{border:1px solid var(--line);border-left:3px solid var(--dead);
+    border-radius:6px;padding:9px;margin-bottom:7px;background:var(--panel);
+    animation:slide .3s ease}
+  @keyframes slide{from{opacity:0;transform:translateX(14px)}}
+  .item.act{border-left-color:var(--warn)}
+  .item.done{border-left-color:var(--fin);opacity:.55}
+  .ititle{font-size:11px;font-weight:600;margin-bottom:3px}
+  .ibody{font-size:10.5px;color:var(--dim);line-height:1.45}
+  .isrc{font-size:9.5px;color:var(--dimmer);margin-top:5px}
+
+  /* ---- provenance popover ---- */
+  #prov{position:fixed;right:16px;bottom:16px;width:410px;max-height:64vh;
+    overflow-y:auto;background:#0e141d;border:1px solid #35486a;border-radius:9px;
+    padding:13px;display:none;z-index:40;box-shadow:0 18px 50px rgba(0,0,0,.65)}
+  .pv{border-top:1px solid #172130;padding:7px 0;font-size:11px}
+  .kl{font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;
+    text-transform:uppercase;font-weight:600}
+  .kl.measured{background:#0d3d2a;color:#4ade9a}
+  .kl.published{background:#0e3350;color:#5fb4ff}
+  .kl.modeled{background:#3d3410;color:#e5c15c}
+  .kl.assumed{background:#4a1d22;color:#ff8b96}
+  .kl.derived{background:#2f2545;color:#c9a6ff}
+  a{color:var(--eng)}
+
+  /* ---- interrupt ---- */
+  #intr{position:fixed;inset:0;background:rgba(4,7,11,.82);z-index:60;
+    display:none;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+  .card{width:min(660px,92vw);background:#0f1620;border:1px solid var(--dead);
+    border-radius:11px;padding:22px;box-shadow:0 0 70px rgba(255,77,94,.28)}
+  .ihead{color:var(--dead);font-size:10px;letter-spacing:.26em;margin-bottom:9px}
+  .imain{font-size:19px;line-height:1.42;margin-bottom:12px}
+  .isub{font-size:12px;color:var(--dim);line-height:1.6}
+  .empty{color:var(--dimmer);font-size:11px;padding:14px;text-align:center;
+    border:1px dashed var(--line);border-radius:6px}
+</style>
+
+<header>
+  <span class="brand">PREMISE</span>
+  <span class="tag">every number knows why it's true — and when it stopped being true</span>
+  <div class="budget">
+    <span class="tag">deployed</span><b id="dep">$0</b>
+    <span class="tag">of $40M</span>
+    <button id="bSeed">reset</button>
+    <button id="bR1">run baseline</button>
+    <button id="bE1" disabled>contamination event</button>
+    <button id="bE3" disabled>LCFS print</button>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <h2>Portfolio · 6 sites</h2>
+    <div id="sites"></div>
+  </div>
+
+  <div class="col">
+    <div class="agentbar" id="abar">
+      <span class="chipagent eng" id="a-engineering">engineering</span>
+      <span class="chipagent per" id="a-permitting">permitting</span>
+      <span class="chipagent fin" id="a-finance">finance</span>
+      <span class="chipagent" id="a-llm">llm —</span>
+    </div>
+    <svg id="graph"></svg>
+    <h2 id="uwTitle">Working underwrite</h2>
+    <div id="uw"><div class="empty">Run the baseline to populate the ledger.</div></div>
+  </div>
+
+  <div class="col">
+    <h2>Revision inbox</h2>
+    <div id="inbox"><div class="empty">No stale conclusions.</div></div>
+    <h2 style="margin-top:16px">Human actions · you decide</h2>
+    <div id="acts"><div class="empty">Nothing awaiting approval.</div></div>
+  </div>
+</main>
+
+<div id="prov"></div>
+
+<div id="intr"><div class="card">
+  <div class="ihead">◆ INTERRUPT — UNREQUESTED</div>
+  <div class="imain" id="iMain"></div>
+  <div class="isub" id="iSub"></div>
+</div></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const AG = {engineering:'--eng', permitting:'--per', finance:'--fin'};
+const agColor = a => getComputedStyle(document.documentElement)
+  .getPropertyValue(AG[a] || '--dim').trim();
+
+let STATE = null, SEL = null, LIVE = 0, TOTAL = 0;
+
+// Esri World Imagery — free, no API key. Real aerials of real parcels.
+const tile = (lat, lon, z=16) => {
+  const n = 2**z;
+  const x = Math.floor((lon+180)/360*n);
+  const la = lat*Math.PI/180;
+  const y = Math.floor((1-Math.asinh(Math.tan(la))/Math.PI)/2*n);
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+};
+
+const money = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M'
+                 : n>0    ? '$'+Math.round(n).toLocaleString() : '—';
+
+// ---------- rendering ----------
+function renderSites(){
+  const {sites, allocation} = STATE;
+  const byId = {};
+  (allocation?.rows||[]).forEach(r => byId[r.site_id] = r);
+  $('#sites').innerHTML = sites.map(s => {
+    const r = byId[s._id] || {};
+    const cls = r.verdict==='allocate' ? 'ok' : r.verdict==='stale' ? 'bad' : 'no';
+    return `<div class="site ${SEL===s._id?'sel':''}" data-id="${s._id}">
+      <div class="thumb" style="background-image:url('${tile(s.lat,s.lon)}')">
+        <span class="badge ${cls}">${r.verdict||'—'}</span>
+      </div>
+      <div class="sbody">
+        <div class="sname">${s.name}</div>
+        <div class="smeta">${s.city} · ${s.lot_acres} ac · ${s.zoning}</div>
+        <div class="srow">
+          <span class="smeta">${r.spread!=null?r.spread+' bps':'—'}</span>
+          <span class="alloc ${cls}">${money(r.allocated||0)}</span>
+        </div>
+      </div></div>`;
+  }).join('');
+  document.querySelectorAll('.site').forEach(el =>
+    el.onclick = () => { SEL = el.dataset.id; renderSites(); renderUW(); });
+}
+
+const ORDER = ['max_mw','max_mwh','duration_hours','capex','months_to_energization',
+  'entitlement_path','months_to_entitle','cleanup_standard_triggered','hma_required',
+  'basis','noi','yield_on_cost','development_spread_bps','irr','capex_ceiling','verdict'];
+
+function fmt(f, v){
+  if(typeof v === 'boolean') return v ? 'yes' : 'no';
+  if(f==='yield_on_cost'||f==='irr') return (v*100).toFixed(2)+'%';
+  if(['basis','noi','capex','capex_ceiling'].includes(f)) return money(v);
+  return String(v);
+}
+
+function renderUW(){
+  if(!SEL){ $('#uw').innerHTML = '<div class="empty">Select a site.</div>'; return; }
+  const site = STATE.sites.find(s=>s._id===SEL);
+  $('#uwTitle').textContent = 'Working underwrite · ' + site.name;
+  const rows = (STATE.conclusions[SEL]||[])
+    .sort((a,b)=> ORDER.indexOf(a.field) - ORDER.indexOf(b.field));
+  if(!rows.length){ $('#uw').innerHTML='<div class="empty">No conclusions yet.</div>'; return; }
+
+  let last = null, html = '';
+  for(const c of rows){
+    if(c.agent !== last){
+      html += `<div style="margin:11px 0 4px;font-size:10px;letter-spacing:.14em;
+        color:${agColor(c.agent)}">${c.agent.toUpperCase()}</div>`;
+      last = c.agent;
+    }
+    html += `<div class="field ${c.status==='stale'?'stale':''}">
+      <span class="fname"><i class="agentdot" style="background:${agColor(c.agent)}"></i>${c.field}</span>
+      <span><span class="fval" data-cid="${c.id}">${fmt(c.field,c.value)}</span>
+        <span style="color:var(--dimmer);font-size:10px"> ${c.unit||''}</span>
+        ${c.status==='stale'?'<span style="color:var(--dead);font-size:10px"> ● stale</span>':''}</span>
+      </div>`;
+  }
+  const why = rows.find(r=>r.reasoning);
+  if(why) html += `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);
+    border-radius:6px;font-size:11px;color:var(--dim);line-height:1.6">${why.reasoning}</div>`;
+  $('#uw').innerHTML = html;
+  document.querySelectorAll('.fval').forEach(el =>
+    el.onclick = () => showProv(el.dataset.cid));
+}
+
+async function showProv(cid){
+  const d = await (await fetch('/api/provenance/'+cid)).json();
+  if(d.error) return;
+  const c = d.conclusion;
+  const counts = Object.entries(d.class_counts)
+    .map(([k,v])=>`<span class="kl ${k}">${k} ${v}</span>`).join(' ');
+  $('#prov').style.display='block';
+  $('#prov').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:start">
+      <div><div style="font-size:12px;font-weight:600">${c.field} = ${fmt(c.field,c.value)} ${c.unit||''}</div>
+      <div style="font-size:10px;color:var(--dimmer);margin-top:2px">
+        ${c.agent} agent · round ${c.round} ·
+        ${c.llm?'<span style="color:var(--fin)">live model call</span>'
+                :'<span style="color:var(--warn)">deterministic fallback</span>'}</div></div>
+      <button onclick="document.getElementById('prov').style.display='none'">close</button>
+    </div>
+    <div style="margin:9px 0;font-size:11px;color:var(--dim);line-height:1.55">${c.reasoning||''}</div>
+    <div style="margin:9px 0">${counts}</div>
+    <div style="font-size:10px;color:var(--dimmer);letter-spacing:.12em;margin-top:10px">
+      RESTS ON ${d.premises.length} PREMISES</div>
+    ${d.premises.map(p=>`<div class="pv">
+      <div style="display:flex;justify-content:space-between;gap:8px">
+        <span>${p.field} = <b>${p.value}</b> <span style="color:var(--dimmer)">${p.unit||''}</span></span>
+        <span class="kl ${p.klass}">${p.klass}</span></div>
+      <div style="font-size:10px;color:var(--dimmer);margin-top:3px">
+        ${p.source_name || '<span style="color:var(--dead)">no source — working assumption</span>'}
+        ${p.source_url?` · <a href="${p.source_url}" target="_blank">source</a>`:''}
+        · conf ${p.confidence}</div>
+      ${p.produced_by?`<div style="font-size:10px;color:var(--per);margin-top:3px">
+        ↳ produced by ${p.produced_by.agent} agent</div>`:''}
+    </div>`).join('')}`;
+}
+
+function renderInbox(){
+  const stale = [];
+  Object.entries(STATE.conclusions).forEach(([sid,cs]) =>
+    cs.filter(c=>c.status==='stale').forEach(c=>stale.push({...c, sid})));
+  $('#inbox').innerHTML = stale.length ? stale.map(c=>{
+    const s = STATE.sites.find(x=>x._id===c.sid);
+    return `<div class="item"><div class="ititle">${c.field} · ${s?s.name:c.sid}</div>
+      <div class="ibody">${c.agent} agent · this conclusion's premise died.</div></div>`;
+  }).join('') : '<div class="empty">No stale conclusions.</div>';
+
+  $('#acts').innerHTML = STATE.actions.length ? STATE.actions.map(a=>`
+    <div class="item act"><div class="ititle">${a.site_name}</div>
+      <div class="ibody">${a.action}</div>
+      <div class="isrc">${a.because}</div>
+      <button style="margin-top:7px" onclick="approve('${a._id}')">approve</button>
+    </div>`).join('') : '<div class="empty">Nothing awaiting approval.</div>';
+}
+
+async function approve(id){
+  await fetch(`/api/action/${id}/approve`, {method:'POST'});
+  await refresh();
+}
+
+// ---------- dependency graph ----------
+async function drawGraph(hits){
+  const g = await (await fetch('/api/graph')).json();
+  const svg = $('#graph'), W = svg.clientWidth, H = 230;
+  const lanes = {premise:0, engineering:1, permitting:2, finance:3};
+  const cols = [[],[],[],[]];
+  const pos = {};
+
+  for(const n of g.nodes){
+    const lane = n.kind==='premise' && n.trigger!=='derived'
+      ? 0 : (lanes[n.agent] ?? 0);
+    if(n.kind==='premise' && n.trigger==='derived') continue;
+    cols[lane].push(n);
+  }
+  cols.forEach((col,i)=>{
+    const x = 60 + i*((W-120)/3);
+    col.forEach((n,j)=>{
+      pos[n.id] = {x, y: 22 + (j+.5)*((H-44)/Math.max(col.length,1)), n};
+    });
+  });
+
+  // Derived premises sit on their producing conclusion so edges stay readable.
+  for(const n of g.nodes)
+    if(n.kind==='premise' && n.trigger==='derived'){
+      const src = g.edges.find(e=>e.to===n.id && e.derived);
+      if(src && pos[src.from]) pos[n.id] = pos[src.from];
+    }
+
+  const hit = new Set(hits||[]);
+  let out = '';
+  for(const e of g.edges){
+    const a = pos[e.from], b = pos[e.to];
+    if(!a || !b || a===b) continue;
+    const live = hit.has(e.from) || hit.has(e.to);
+    out += `<path d="M${a.x},${a.y} C${(a.x+b.x)/2},${a.y} ${(a.x+b.x)/2},${b.y} ${b.x},${b.y}"
+      fill="none" stroke="${live?'#ff4d5e':'#1c2634'}" stroke-width="${live?1.6:.7}"
+      opacity="${live?.95:.5}"/>`;
+  }
+  for(const id in pos){
+    const {x,y,n} = pos[id];
+    if(!n) continue;
+    const dead = n.status==='stale' || n.status==='superseded' || hit.has(id);
+    const c = dead ? '#ff4d5e' : (n.kind==='premise' ? '#3f5570' : agColor(n.agent));
+    out += `<circle cx="${x}" cy="${y}" r="${dead?4.2:2.6}" fill="${c}">
+      ${dead?'<animate attributeName="r" values="2.6;6;2.6" dur="1.1s" repeatCount="4"/>':''}
+      </circle>`;
+  }
+  const labels = ['premises','engineering','permitting','finance'];
+  labels.forEach((l,i)=>{
+    out += `<text x="${60+i*((W-120)/3)}" y="13" fill="#5a6c82" font-size="9"
+      text-anchor="middle" letter-spacing="1.4">${l.toUpperCase()}</text>`;
+  });
+  svg.innerHTML = out;
+}
+
+// ---------- voice ----------
+async function speak(text){
+  try{
+    const r = await fetch('/api/voice?text='+encodeURIComponent(text));
+    if(r.headers.get('content-type')?.includes('audio')){
+      new Audio(URL.createObjectURL(await r.blob())).play(); return;
+    }
+  }catch(e){}
+  // Browser speech synthesis: free, no key, and the interrupt still speaks.
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.04; u.pitch = .95;
+  speechSynthesis.speak(u);
+}
+
+// ---------- events ----------
+const es = new EventSource('/api/stream');
+es.onmessage = async ev => {
+  const m = JSON.parse(ev.data);
+
+  if(m.type==='agent_start'){ $('#a-'+m.agent).classList.add('run'); }
+  if(m.type==='agent_done'){
+    const el = $('#a-'+m.agent);
+    el.classList.remove('run'); el.classList.add('on');
+    await refresh();
+  }
+  if(m.type==='round_complete'){ await refresh(); drawGraph([]); }
+
+  if(m.type==='cascade'){
+    const ids = [m.killed, ...m.staled.map(s=>s.id)];
+    drawGraph(ids);
+    m.staled.forEach(s=>{
+      const el = document.querySelector(`.site[data-id="${s.site_id}"]`);
+      if(el) el.classList.add('hit');
+    });
+  }
+
+  if(m.type==='interrupt'){
+    const line = `${m.agents.join(' and ')} revised ${m.sites.length} site${m.sites.length>1?'s':''}. `
+      + `${m.count} of your conclusions are stale. Your allocation is wrong.`;
+    $('#iMain').textContent = line;
+    $('#iSub').innerHTML = `<b>${m.headline}</b><br>Nobody requested this. `
+      + `A premise died, <code>$graphLookup</code> walked the dependency graph, and a `
+      + `change stream woke the agents that depended on it.`;
+    $('#intr').style.display='flex';
+    speak(line);
+    setTimeout(()=>$('#intr').style.display='none', 6200);
+  }
+
+  if(m.type==='change_stream' && m.cascade_size){
+    console.log('change stream:', m.killed_field, '→', m.cascade_size,
+                'conclusions across', m.agents_crossed);
+  }
+};
+
+async function refresh(){
+  STATE = await (await fetch('/api/state')).json();
+  if(!SEL && STATE.sites.length) SEL = STATE.sites[0]._id;
+  $('#dep').textContent = money(STATE.allocation?.deployed || 0);
+  const live = Object.values(STATE.conclusions).flat();
+  LIVE = live.filter(c=>c.llm).length; TOTAL = live.length;
+  $('#a-llm').textContent = TOTAL ? `llm ${LIVE}/${TOTAL} live` : 'llm —';
+  renderSites(); renderUW(); renderInbox();
+}
+
+const busy = (on) => document.querySelectorAll('header button')
+  .forEach(b=>b.disabled = on);
+
+$('#bSeed').onclick = async()=>{ busy(true); await fetch('/api/seed',{method:'POST'});
+  SEL=null; await refresh(); drawGraph([]);
+  busy(false); $('#bE1').disabled=true; $('#bE3').disabled=true; };
+$('#bR1').onclick = async()=>{ busy(true); await fetch('/api/round/1',{method:'POST'});
+  busy(false); $('#bE1').disabled=false; };
+$('#bE1').onclick = async()=>{ busy(true);
+  await fetch('/api/event/evt-contamination',{method:'POST'});
+  busy(false); $('#bE3').disabled=false; };
+$('#bE3').onclick = async()=>{ busy(true);
+  await fetch('/api/event/evt-lcfs-print',{method:'POST'}); busy(false); };
+
+refresh().then(()=>drawGraph([]));
+</script>
