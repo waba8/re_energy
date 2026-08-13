@@ -98,6 +98,12 @@
   .kl.modeled{background:#3d3410;color:#e5c15c}
   .kl.assumed{background:#4a1d22;color:#ff8b96}
   .kl.derived{background:#2f2545;color:#c9a6ff}
+  .kl.analyst_override{background:#4a3a08;color:#ffc457}
+  .ovr{background:#1a2536;border:1px solid #33506f;color:#7fb4ff;font-size:9px;
+    padding:2px 7px;border-radius:3px;cursor:pointer;margin-left:6px}
+  .ovr:hover{background:#243449}
+  .ovrin{width:88px;background:#0a0f16;border:1px solid #33506f;color:var(--ink);
+    font:inherit;font-size:10px;padding:2px 5px;border-radius:3px}
   a{color:var(--eng)}
 
   /* ---- interrupt ---- */
@@ -138,6 +144,7 @@
       <span class="chipagent fin" id="a-finance">finance</span>
       <span class="chipagent" id="a-llm">llm —</span>
     </div>
+    <div id="gcap" style="font-size:10px;color:var(--dim);margin-bottom:5px"></div>
     <svg id="graph"></svg>
     <h2 id="uwTitle">Working underwrite</h2>
     <div id="uw"><div class="empty">Run the baseline to populate the ledger.</div></div>
@@ -202,7 +209,7 @@ function renderSites(){
       </div></div>`;
   }).join('');
   document.querySelectorAll('.site').forEach(el =>
-    el.onclick = () => { SEL = el.dataset.id; renderSites(); renderUW(); });
+    el.onclick = () => { SEL = el.dataset.id; renderSites(); renderUW(); drawGraph([]); });
 }
 
 const ORDER = ['max_mw','max_mwh','duration_hours','capex','months_to_energization',
@@ -243,7 +250,7 @@ function renderUW(){
     border-radius:6px;font-size:11px;color:var(--dim);line-height:1.6">${why.reasoning}</div>`;
   $('#uw').innerHTML = html;
   document.querySelectorAll('.fval').forEach(el =>
-    el.onclick = () => showProv(el.dataset.cid));
+    el.onclick = () => { FOCUS = el.dataset.cid; drawGraph([]); showProv(el.dataset.cid); });
 }
 
 async function showProv(cid){
@@ -266,9 +273,14 @@ async function showProv(cid){
     <div style="margin:9px 0">${counts}</div>
     <div style="font-size:10px;color:var(--dimmer);letter-spacing:.12em;margin-top:10px">
       RESTS ON ${d.premises.length} PREMISES</div>
-    ${d.premises.map(p=>`<div class="pv">
+    ${d.premises.map(p=>{
+      // Derived premises belong to the agent that produced them; overriding one
+      // would edit a conclusion rather than an input. Everything else is fair game.
+      const editable = p.trigger !== 'derived';
+      return `<div class="pv">
       <div style="display:flex;justify-content:space-between;gap:8px">
-        <span>${p.field} = <b>${p.value}</b> <span style="color:var(--dimmer)">${p.unit||''}</span></span>
+        <span>${p.field} = <b>${p.value}</b> <span style="color:var(--dimmer)">${p.unit||''}</span>
+          ${editable?`<button class="ovr" onclick="startOvr('${p._id}','${p.value}',this)">override</button>`:''}</span>
         <span class="kl ${p.klass}">${p.klass}</span></div>
       <div style="font-size:10px;color:var(--dimmer);margin-top:3px">
         ${p.source_name || '<span style="color:var(--dead)">no source — working assumption</span>'}
@@ -276,7 +288,26 @@ async function showProv(cid){
         · conf ${p.confidence}</div>
       ${p.produced_by?`<div style="font-size:10px;color:var(--per);margin-top:3px">
         ↳ produced by ${p.produced_by.agent} agent</div>`:''}
-    </div>`).join('')}`;
+    </div>`}).join('')}`;
+}
+
+// The analyst disagreeing with an assumption is a premise death like any other.
+function startOvr(pid, cur, btn){
+  btn.outerHTML = `<input class="ovrin" id="ovrin" value="${cur}">
+    <button class="ovr" onclick="sendOvr('${pid}')">apply</button>`;
+  const el = document.getElementById('ovrin');
+  el.focus(); el.select();
+  el.onkeydown = e => { if(e.key==='Enter') sendOvr(pid); };
+}
+
+async function sendOvr(pid){
+  const v = document.getElementById('ovrin').value;
+  $('#prov').style.display = 'none';
+  const r = await fetch(`/api/premise/${pid}/override?value=${encodeURIComponent(v)}`,
+                        {method:'POST'});
+  const d = await r.json();
+  if(d.error){ alert(d.error); return; }
+  await refresh();
 }
 
 function renderInbox(){
@@ -303,8 +334,20 @@ async function approve(id){
 }
 
 // ---------- dependency graph ----------
+let FOCUS = null;   // conclusion id whose chain the graph is showing
+
 async function drawGraph(hits){
-  const g = await (await fetch('/api/graph')).json();
+  if(!SEL) return;
+  const url = FOCUS ? '/api/graph?conclusion='+FOCUS : '/api/graph?site='+SEL;
+  const g = await (await fetch(url)).json();
+  $('#gcap').innerHTML = FOCUS
+    ? `dependency chain behind <b>${FOCUS.split('-').slice(3,-1).join('_')}</b> — `
+      + `${g.nodes.filter(n=>n.kind==='premise').length} premises feeding `
+      + `${g.nodes.filter(n=>n.kind==='conclusion').length} conclusions `
+      + `<button class="ovr" onclick="FOCUS=null;drawGraph([])">show whole site</button>`
+    : `all conclusions for this site — <span style="color:var(--dimmer)">`
+      + `click any number below to isolate its chain</span>`;
+  if(FOCUS) return drawFocused(g, hits);
   const svg = $('#graph'), W = svg.clientWidth, H = 230;
   const lanes = {premise:0, engineering:1, permitting:2, finance:3};
   const cols = [[],[],[],[]];
@@ -357,6 +400,48 @@ async function drawGraph(hits){
   svg.innerHTML = out;
 }
 
+// Focused view: few enough nodes to label every one, which is the difference
+// between a diagram and a hairball.
+function drawFocused(g, hits){
+  const svg = $('#graph'), W = svg.clientWidth, H = 230;
+  const hit = new Set(hits||[]);
+  const prem = g.nodes.filter(n=>n.kind==='premise');
+  const conc = g.nodes.filter(n=>n.kind==='conclusion');
+  const mid  = conc.filter(c=>c._id!==g.focus && c.id!==g.focus);
+  const tgt  = conc.filter(c=>c.id===g.focus);
+  const cols = [prem, mid, tgt];
+  const pos = {};
+  cols.forEach((col,i)=>{
+    const x = 110 + i*((W-230)/2);
+    col.forEach((n,j)=>{
+      pos[n.id] = {x, y: 20 + (j+.5)*((H-36)/Math.max(col.length,1)), n};
+    });
+  });
+  let out = '';
+  for(const e of g.edges){
+    const a = pos[e.from], b = pos[e.to];
+    if(!a||!b) continue;
+    const live = hit.has(e.from)||hit.has(e.to);
+    out += `<path d="M${a.x},${a.y} C${(a.x+b.x)/2},${a.y} ${(a.x+b.x)/2},${b.y} ${b.x},${b.y}"
+      fill="none" stroke="${live?'#ff4d5e':'#24384f'}" stroke-width="${live?1.5:.9}"
+      opacity="${live?.95:.7}"/>`;
+  }
+  const KC = {assumed:'#ff8b96', published:'#5fb4ff', modeled:'#e5c15c',
+              measured:'#4ade9a', derived:'#c9a6ff', analyst_override:'#ffc457'};
+  for(const id in pos){
+    const {x,y,n} = pos[id];
+    const dead = n.status==='stale'||n.status==='superseded'||hit.has(id);
+    const c = dead ? '#ff4d5e'
+      : n.kind==='premise' ? (KC[n.klass]||'#3f5570') : agColor(n.agent);
+    const anchor = n.kind==='premise' ? 'end' : 'start';
+    const dx = n.kind==='premise' ? -7 : 7;
+    out += `<circle cx="${x}" cy="${y}" r="${dead?4:3}" fill="${c}"/>
+      <text x="${x+dx}" y="${y+3}" fill="${dead?'#ff4d5e':'#8296ad'}" font-size="8.5"
+        text-anchor="${anchor}">${(n.label||'').slice(0,26)}</text>`;
+  }
+  svg.innerHTML = out;
+}
+
 // ---------- voice ----------
 async function speak(text){
   try{
@@ -394,11 +479,19 @@ es.onmessage = async ev => {
   }
 
   if(m.type==='interrupt'){
-    const line = `${m.agents.join(' and ')} revised ${m.sites.length} site${m.sites.length>1?'s':''}. `
-      + `${m.count} of your conclusions are stale. Your allocation is wrong.`;
+    const line = m.by_analyst
+      ? `That assumption was load-bearing. ${m.count} conclusions across `
+        + `${m.agents.join(', ')} just went stale. Re-underwriting now.`
+      : `${m.agents.join(' and ')} revised ${m.sites.length} site${m.sites.length>1?'s':''}. `
+        + `${m.count} of your conclusions are stale. Your allocation is wrong.`;
     $('#iMain').textContent = line;
-    $('#iSub').innerHTML = `<b>${m.headline}</b><br>Nobody requested this. `
-      + `A premise died, <code>$graphLookup</code> walked the dependency graph, and a `
+    document.querySelector('.ihead').textContent = m.by_analyst
+      ? '◆ YOUR EDIT — CASCADE' : '◆ INTERRUPT — UNREQUESTED';
+    $('#iSub').innerHTML = `<b>${m.headline}</b><br>`
+      + (m.by_analyst
+         ? `Your override ran the same path a market event does — supersede the premise, `
+         : `Nobody requested this. A premise died, `)
+      + `<code>$graphLookup</code> walked the dependency graph, and a `
       + `change stream woke the agents that depended on it.`;
     $('#intr').style.display='flex';
     speak(line);

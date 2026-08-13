@@ -156,6 +156,14 @@ async def publish_conclusion(*, agent, site_id, field, value, unit, reasoning,
     if extra:
         conclusion.update(extra)
 
+    # A re-derived conclusion retires the one it replaces. Without this, stale
+    # round-N conclusions linger beside their round-N+1 replacements and the
+    # analyst sees both the corpse and the answer.
+    await db.conclusions().update_many(
+        {"agent": agent, "site_id": site_id, "field": field, "_id": {"$ne": cid}},
+        {"$set": {"status": "superseded", "superseded_by": cid,
+                  "superseded_at": utcnow()}},
+    )
     await db.conclusions().replace_one({"_id": cid}, conclusion, upsert=True)
 
     derived_premise = {

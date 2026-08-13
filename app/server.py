@@ -120,11 +120,68 @@ async def api_event(event_id: str):
     return res
 
 
+@app.post("/api/premise/{premise_id}/override")
+async def api_override(premise_id: str, value: str):
+    """The analyst disagrees with an assumption and says so.
+
+    This runs the identical code path an external market event uses — the same
+    supersession, the same $graphLookup, the same change stream. A human is just
+    another source a premise can die from, which is why no special casing is
+    needed to support one.
+    """
+    old = await db.premises().find_one({"_id": premise_id})
+    if not old:
+        return {"error": "unknown premise"}
+
+    # Preserve the premise's type; a numeric field must not silently become a string.
+    new_value: object = value
+    if isinstance(old.get("value"), (int, float)) and not isinstance(old.get("value"), bool):
+        try:
+            new_value = float(value)
+            if float(value).is_integer() and isinstance(old["value"], int):
+                new_value = int(float(value))
+        except ValueError:
+            return {"error": f"{old.get('field')} is numeric; '{value}' is not"}
+
+    res = await graph.supersede_premise(
+        premise_id, new_value,
+        reason=f"Analyst override: {old.get('field')} {old.get('value')} → {new_value}",
+        source_name="Analyst override — judgment, not a published source",
+        klass="analyst_override",
+    )
+
+    sites = sorted({c["site_id"] for c in res["cascade"] if c.get("site_id")})
+    await emit({
+        "type": "cascade", "killed": premise_id, "field": old.get("field"),
+        "old_value": old.get("value"), "new_value": new_value,
+        "reason": f"You changed {old.get('field')}.",
+        "staled": [{"id": c["_id"], "agent": c.get("agent"),
+                    "site_id": c.get("site_id"), "field": c.get("field"),
+                    "depth": c.get("depth", 0)} for c in res["cascade"]],
+        "agents_crossed": sorted({c.get("agent") for c in res["cascade"] if c.get("agent")}),
+    })
+    if res["cascade"]:
+        await emit({
+            "type": "interrupt", "count": len(res["cascade"]), "sites": sites,
+            "agents": sorted({c.get("agent") for c in res["cascade"] if c.get("agent")}),
+            "headline": f"You changed {old.get('field')} from {old.get('value')} to {new_value}.",
+            "by_analyst": True,
+        })
+        await asyncio.sleep(1.0)
+        await engine.rerun_affected(2, sites or [s["_id"] for s in
+                                    await db.sites().find({}).to_list(None)], emit=emit)
+
+    return {"cascade": len(res["cascade"]), "sites": sites}
+
+
 @app.get("/api/state")
 async def api_state():
     sites = await db.sites().find({}).to_list(length=None)
     alloc = await db.allocations().find({}).sort("round", -1).to_list(length=1)
-    concl = await db.conclusions().find({}).to_list(length=None)
+    # Superseded conclusions stay in the collection as history but never reach the
+    # workbench — the analyst sees the current answer, or the fact that it's stale.
+    concl = await db.conclusions().find(
+        {"status": {"$ne": "superseded"}}).to_list(length=None)
     acts = await db.actions().find({"status": "pending"}).to_list(length=None)
 
     by_site = {}
@@ -158,10 +215,54 @@ async def api_calibration():
 
 
 @app.get("/api/graph")
-async def api_graph():
-    """Nodes and edges for the cascade visualisation."""
-    prems = await db.premises().find({}).to_list(length=None)
-    concl = await db.conclusions().find({}).to_list(length=None)
+async def api_graph(site: str | None = None, conclusion: str | None = None):
+    """Nodes and edges for the cascade visualisation.
+
+    Scoped to one site by default. The whole-portfolio graph is 258 nodes and
+    1,340 edges — true, and unreadable. What an analyst needs is the chain behind
+    the site they have open.
+    """
+    if conclusion:
+        # The chain behind a single number: its premises, and for any premise that
+        # is itself another agent's conclusion, that agent's premises too. This is
+        # what an analyst actually needs to see — the whole-site graph is 500 edges.
+        c = await db.conclusions().find_one({"_id": conclusion})
+        if not c:
+            return {"nodes": [], "edges": []}
+        concl = [c]
+        seen = set(c.get("depends_on", []))
+        parents = await db.premises().find({"_id": {"$in": list(seen)}}).to_list(None)
+        for p in parents:
+            if p.get("trigger") == "derived" and p.get("derived_from"):
+                pc = await db.conclusions().find_one({"_id": p["derived_from"]})
+                if pc:
+                    concl.append(pc)
+                    seen |= set(pc.get("depends_on", []))
+        prems = await db.premises().find({"_id": {"$in": list(seen)}}).to_list(None)
+        nodes, edges = [], []
+        for p in prems:
+            nodes.append({"id": p["_id"], "kind": "premise", "label": p.get("field"),
+                          "agent": p.get("owner_agent"), "status": p.get("status", "active"),
+                          "klass": p.get("klass"), "trigger": p.get("trigger")})
+        for cc in concl:
+            nodes.append({"id": cc["_id"], "kind": "conclusion", "label": cc.get("field"),
+                          "agent": cc.get("agent"), "status": cc.get("status", "active")})
+            for d in cc.get("depends_on", []):
+                if d in seen:
+                    edges.append({"from": d, "to": cc["_id"]})
+            if cc.get("publishes"):
+                edges.append({"from": cc["_id"], "to": cc["publishes"], "derived": True})
+        return {"nodes": nodes, "edges": edges, "focus": conclusion}
+
+    concl_q = {"site_id": site, "status": {"$ne": "superseded"}} if site else {}
+    concl = await db.conclusions().find(concl_q).to_list(length=None)
+
+    if site:
+        needed = {d for c in concl for d in c.get("depends_on", [])}
+        needed |= {c["publishes"] for c in concl if c.get("publishes")}
+        prems = await db.premises().find({"_id": {"$in": list(needed)}}).to_list(length=None)
+    else:
+        prems = await db.premises().find({}).to_list(length=None)
     nodes, edges = [], []
     for p in prems:
         nodes.append({"id": p["_id"], "kind": "premise", "label": p.get("field"),
